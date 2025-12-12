@@ -1,38 +1,58 @@
 import streamlit as st
 import pandas as pd
 import importlib
-import pkgutil
 import inspect
-import time
+import os
+import sys
 import matplotlib.pyplot as plt
 
 st.set_page_config(layout="wide")
 
 # -------------------------------------------------
-# FUNCTION LOADER (RELOAD SAFE)
+# FORCE PYTHON TO SEE analysis_functions
 # -------------------------------------------------
-def load_analysis_functions(force_reload=False):
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ANALYSIS_DIR = os.path.join(BASE_DIR, "analysis_functions")
+
+if ANALYSIS_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+
+# -------------------------------------------------
+# LOAD ANALYSIS FUNCTIONS (ROBUST)
+# -------------------------------------------------
+def load_analysis_functions():
     functions = {}
-    package_name = "analysis_functions"
 
-    if force_reload and package_name in list(importlib.sys.modules.keys()):
-        for mod in list(importlib.sys.modules.keys()):
-            if mod.startswith(package_name):
-                del importlib.sys.modules[mod]
+    if not os.path.exists(ANALYSIS_DIR):
+        return functions
 
-    package = importlib.import_module(package_name)
+    for file in os.listdir(ANALYSIS_DIR):
+        if not file.endswith(".py"):
+            continue
+        if file == "__init__.py":
+            continue
 
-    for _, module_name, _ in pkgutil.iter_modules(package.__path__):
-        full_name = f"{package_name}.{module_name}"
-        module = importlib.import_module(full_name)
+        module_name = file[:-3]
+        full_module = f"analysis_functions.{module_name}"
 
-        funcs = [
-            obj for _, obj in inspect.getmembers(module)
-            if inspect.isfunction(obj)
-        ]
+        try:
+            if full_module in sys.modules:
+                del sys.modules[full_module]
 
-        if len(funcs) == 1:
-            functions[module_name] = funcs[0]
+            module = importlib.import_module(full_module)
+            importlib.reload(module)
+
+            funcs = [
+                obj for _, obj in inspect.getmembers(module)
+                if inspect.isfunction(obj)
+            ]
+
+            if len(funcs) == 1:
+                functions[module_name] = funcs[0]
+
+        except Exception as e:
+            st.warning(f"Failed to load {file}: {e}")
 
     return functions
 
@@ -43,22 +63,22 @@ def load_analysis_functions(force_reload=False):
 if "workflow" not in st.session_state:
     st.session_state.workflow = []
 
-if "refresh_key" not in st.session_state:
-    st.session_state.refresh_key = 0
-
 
 # -------------------------------------------------
-# HEADER
+# UI
 # -------------------------------------------------
 st.title("🔬 No-Code Data Analysis Platform")
 
-if st.button("🔄 Refresh analysis tools"):
-    st.session_state.refresh_key += 1
+analysis_funcs = load_analysis_functions()
 
-
-analysis_funcs = load_analysis_functions(
-    force_reload=True
-)
+if not analysis_funcs:
+    st.warning(
+        "No analysis functions found.\n\n"
+        "Make sure:\n"
+        "• analysis_functions/__init__.py exists\n"
+        "• Each .py file has EXACTLY ONE function\n"
+        "• You restarted Streamlit after adding files"
+    )
 
 
 # -------------------------------------------------
@@ -75,15 +95,15 @@ st.dataframe(df)
 
 
 # -------------------------------------------------
-# TOOL PALETTE (BUTTON GRID)
+# ADD STEP (BUTTON GRID)
 # -------------------------------------------------
 st.markdown("---")
 st.header("➕ Add Analysis Step")
 
 cols = st.columns(3)
 
-for idx, (name, func) in enumerate(analysis_funcs.items()):
-    with cols[idx % 3]:
+for i, (name, func) in enumerate(analysis_funcs.items()):
+    with cols[i % 3]:
         if st.button(name.replace("_", " ").title()):
             st.session_state.workflow.append({
                 "label": name,
@@ -104,7 +124,6 @@ for i, block in enumerate(st.session_state.workflow):
     st.subheader(f"Step {i+1}: {block['label'].replace('_',' ').title()}")
     func = block["func"]
 
-    # INPUT CONFIG
     with st.expander("Configure Inputs"):
         sig = inspect.signature(func)
         inputs = {}
@@ -137,14 +156,12 @@ for i, block in enumerate(st.session_state.workflow):
 
         block["inputs"] = inputs
 
-    # RUN
     if st.button(f"▶ Run Step {i+1}", key=f"run_{i}"):
         try:
             block["output"] = func(**block["inputs"])
         except Exception as e:
             block["output"] = f"❌ Error: {e}"
 
-    # OUTPUT
     if block["output"] is not None:
         st.write("### Output")
         if isinstance(block["output"], plt.Figure):
@@ -153,6 +170,7 @@ for i, block in enumerate(st.session_state.workflow):
             st.write(block["output"])
 
     st.markdown("---")
+
 
 
 
